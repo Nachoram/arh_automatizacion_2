@@ -1,0 +1,1080 @@
+{
+  "updatedAt": "2026-03-09T18:45:30.899Z",
+  "createdAt": "2026-03-09T18:34:57.336Z",
+  "id": "h20R8B8TvWqDCZ2F",
+  "name": "automatizacion_arh_2",
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "fieldToSplitOut": "$binary",
+        "options": {
+          "includeBinary": true
+        }
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        -768,
+        2112
+      ],
+      "id": "eff7d390-ba83-44bb-9dd8-0a286b4c8f9d",
+      "name": "Split Out"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=ctúa como un analista legal experto en la Ley 21.234. Tu tarea es extraer información estructurada de correos o documentos sobre fraudes bancarios. \nResponde exclusivamente en formato JSON con la siguiente estructura:\n\n{\n  \"nombre_cliente\": \"Nombre completo del demandante\",\n  \"rut_cliente\": \"RUT del demandante\",\n  \"banco_cliente\": \"Santander, Banco de Chile, Scotiabank o Itaú\",\n  \"monto_reclamado\": \"Monto total en número (sin puntos ni signos)\",\n  \"folios_banco\": [\"Lista de folios mencionados\"],\n  \"domicilio_cliente\": \"Dirección completa del demandante\",\n  \"resumen_ia\": \"Breve descripción del fraude detectado\"\n}\n\nInformación a procesar: {{ $json.text }}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -1344,
+        1568
+      ],
+      "id": "d83727b0-c81e-4126-88cc-c2f8238650a1",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "options": {
+          "temperature": 0.1
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -1280,
+        1808
+      ],
+      "id": "c16476a1-cf8c-4bed-b6e3-a2377c8a8fe2",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "PHgX3LT1GbZeOOGX",
+          "name": "Google Gemini 300"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filtro de relevancia para el Agente AI\nreturn $input.all().map(item => {\n  \n  // 1. Extraer el cuerpo del mensaje (priorizamos texto plano sobre HTML)\n  let rawText = item.json.text || \"\";\n\n  // 2. Limpieza básica: Eliminar excesos de saltos de línea y espacios en blanco\n  let cleanText = rawText\n    .replace(/\\r?\\n|\\r/g, \" \") // Convierte saltos de línea en espacios para un flujo continuo\n    .replace(/\\s\\s+/g, ' ')    // Elimina espacios dobles\n    .trim();\n\n  // 3. (Opcional) Recorte preventivo: Si el mail es excesivamente largo (ej: hilos de respuesta), \n  // nos quedamos con los primeros 4000 caracteres para evitar errores de contexto.\n  cleanText = cleanText.substring(0, 4000);\n\n  // 4. Retornar SOLO la información que el Agente necesita según tu prompt\n  return {\n    json: {\n      text: cleanText,\n      original_subject: item.json.subject,\n      from_email: item.json.from.value[0].address,\n      received_at: item.json.date\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1568,
+        1568
+      ],
+      "id": "b168f923-fc3e-42cb-94c2-0ff887d58c5f",
+      "name": "limpia"
+    },
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {}
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "sender": "iramirez.leg@gmail.com"
+        },
+        "options": {
+          "downloadAttachments": true
+        }
+      },
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -1792,
+        1872
+      ],
+      "id": "3f20c5a1-cefe-4991-b0cc-8640fcc0815d",
+      "name": "Gmail Trigger",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "eRYxn2xC7OnlKoc7",
+          "name": "Gmail account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Valor referencial de la UF para el cálculo de acciones legales \nconst VALOR_UF = 38000; \nconst UMBRAL_UF = 35 * VALOR_UF;\n\nconst nuevosItems = [];\n\nfor (const item of $input.all()) {\n  try {\n    // 1. Extraer y limpiar el JSON proveniente del AI Agent\n    let rawOutput = item.json.output;\n    const jsonString = rawOutput.replace(/```json|```/gi, '').trim();\n    const dataIA = JSON.parse(jsonString);\n\n    // 2. Lógica de Negocio: Cálculo de Tipo_Acción (> 35 UF) \n    const monto = parseFloat(dataIA.monto_reclamado) || 0;\n    const tipoAccion = monto > UMBRAL_UF ? \"Demanda Civil\" : \"Medida Prejudicial\";\n\n    // 3. Construir el objeto plano final (sin ID_Maestro) para Expedientes_Core \n    nuevosItems.push({\n      json: {\n        \"Folio_Banco\": Array.isArray(dataIA.folios_banco) ? dataIA.folios_banco.join(', ') : dataIA.folios_banco,\n        \"Banco_Cliente\": dataIA.banco_cliente,\n        \"RUT_Cliente\": dataIA.rut_cliente,\n        \"Monto_Reclamado\": monto,\n        \"Tipo_Acción\": tipoAccion,\n        \"Estado_Ley_21234\": \"Ingresado\",\n        \"Nombre_cliente\": dataIA.nombre_cliente,\n        \"Domicilio_cliente\": dataIA.domicilio_cliente || \"No especificado\",\n        \"Brief_IA\": dataIA.resumen_ia\n      }\n    });\n  } catch (error) {\n    nuevosItems.push({ json: { error: \"Error procesando datos de IA: \" + error.message } });\n  }\n}\n\nreturn nuevosItems;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -992,
+        1568
+      ],
+      "id": "5f8510b8-7b29-4f68-be5d-74766c39a33d",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "a9b6ae95-2f13-49ca-8bfe-33c67e43cf9b",
+              "leftValue": "={{ Object.values($binary)[0].fileExtension }}",
+              "rightValue": "xlsx",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            },
+            {
+              "id": "0de3ee0f-5060-4b2c-ad7e-62247a225055",
+              "leftValue": "={{ Object.values($binary)[0].fileExtension }}",
+              "rightValue": "pdf",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "looseTypeValidation": "={{ false }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [
+        -320,
+        1920
+      ],
+      "id": "ab180312-bdcd-4050-a1ee-f06142c3f747",
+      "name": "Filter3"
+    },
+    {
+      "parameters": {
+        "tableId": "expedientes_core",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "banco_cliente",
+              "fieldValue": "Santander"
+            },
+            {
+              "fieldId": "rut_cliente",
+              "fieldValue": "={{ $json.RUT_Cliente }}"
+            },
+            {
+              "fieldId": "nombre_cliente",
+              "fieldValue": "={{ $json.Nombre_cliente }}"
+            },
+            {
+              "fieldId": "tipo_accion",
+              "fieldValue": "={{ $json[\"Tipo_Acción\"] }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -768,
+        1568
+      ],
+      "id": "8fb6a92d-a708-4304-908b-523b0590dc98",
+      "name": "crea_flia_saca_id",
+      "credentials": {
+        "supabaseApi": {
+          "id": "aHyskcDEf3XWa7w3",
+          "name": "Supabase account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "a9b6ae95-2f13-49ca-8bfe-33c67e43cf9b",
+              "leftValue": "={{ Object.values($binary)[0].fileExtension }}",
+              "rightValue": "zip",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "looseTypeValidation": "={{ false }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [
+        -544,
+        2208
+      ],
+      "id": "bfcf226c-1359-42ee-b99c-96908e2d1071",
+      "name": "Filter4"
+    },
+    {
+      "parameters": {
+        "binaryPropertyName": "={{ Object.keys($binary)[0] }}",
+        "outputPrefix": "extraido_"
+      },
+      "type": "n8n-nodes-base.compression",
+      "typeVersion": 1.1,
+      "position": [
+        -320,
+        2208
+      ],
+      "id": "26d8ec48-7edc-4b41-8fc2-4aa329828dff",
+      "name": "Compression1"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "3abe44bf-cd8f-4cf8-9ac0-da440a002128",
+              "name": "id_maestro",
+              "value": "={{ $json.id_maestro }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -544,
+        1568
+      ],
+      "id": "c9a8e20a-dd18-4aa0-aa1b-48186b1fb52f",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "resource": "folder",
+        "name": "={{ $json.id_maestro }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "1tjnFESxVtEDgMctjVC0j9sHGMVyS6iaH",
+          "mode": "list",
+          "cachedResultName": "santander",
+          "cachedResultUrl": "https://drive.google.com/drive/folders/1tjnFESxVtEDgMctjVC0j9sHGMVyS6iaH"
+        },
+        "options": {
+          "simplifyOutput": true,
+          "folderColorRgb": "#F52C2C"
+        }
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        -320,
+        1568
+      ],
+      "id": "88ad2cca-84ae-4b3c-97bb-6fbdadbd8444",
+      "name": "Create folder",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "PlY76obRIwsQh9yA",
+          "name": "Google Drive account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "inputDataFieldName": "={{ Object.keys($binary)[0] }}",
+        "name": "={{ $binary[Object.keys($binary)[0]].fileName }}",
+        "driveId": {
+          "__rl": true,
+          "value": "My Drive",
+          "mode": "list",
+          "cachedResultName": "My Drive",
+          "cachedResultUrl": "https://drive.google.com/drive/my-drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "={{ $json.id }}",
+          "mode": "id"
+        },
+        "options": {
+          "simplifyOutput": false
+        }
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        272,
+        1968
+      ],
+      "id": "66056ce4-09f1-4fef-83a9-23ed4d95ad78",
+      "name": "Upload file",
+      "retryOnFail": true,
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "PlY76obRIwsQh9yA",
+          "name": "Google Drive account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -48,
+        1840
+      ],
+      "id": "62f596b2-e831-4e04-b97a-388b9606b795",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "inputDataFieldName": "={{ Object.keys($binary)[0] }}",
+        "name": "={{ $binary[Object.keys($binary)[0]].fileName }}",
+        "driveId": {
+          "__rl": true,
+          "value": "My Drive",
+          "mode": "list",
+          "cachedResultName": "My Drive",
+          "cachedResultUrl": "https://drive.google.com/drive/my-drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "={{ $json.id }}",
+          "mode": "id"
+        },
+        "options": {
+          "simplifyOutput": false
+        }
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        240,
+        2368
+      ],
+      "id": "10ccc774-f719-4e74-b339-cacf4708a620",
+      "name": "Upload file2",
+      "retryOnFail": true,
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "PlY76obRIwsQh9yA",
+          "name": "Google Drive account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        16,
+        2272
+      ],
+      "id": "ef4f4c1b-f294-40b7-8c35-ae656f789212",
+      "name": "Merge1"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://yptieqrtzplmhbanwzmi.supabase.co/storage/v1/object/evidencias/{{ $(\"crea_flia_saca_id\").first().json.id_maestro }}/{{ $binary[Object.keys($binary)[0]].fileName }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "=={{ $binary[Object.keys($binary)[0]].mimeType }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "={{ Object.keys($binary)[0] }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        112,
+        1568
+      ],
+      "id": "6fd99adf-4ed3-428c-b504-242d93c866d5",
+      "name": "HTTP Request2",
+      "credentials": {
+        "supabaseApi": {
+          "id": "aHyskcDEf3XWa7w3",
+          "name": "Supabase account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "tableId": "expediente_docs",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "storage_key",
+              "fieldValue": "={{ $json.Key }}"
+            },
+            {
+              "fieldId": "storage_id",
+              "fieldValue": "={{ $json.Id }}"
+            },
+            {
+              "fieldId": "id_maestro_rel",
+              "fieldValue": "={{ $json.id_maestro_rel }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        640,
+        1568
+      ],
+      "id": "10c7546d-758a-4557-8c36-2ba63f163e22",
+      "name": "Create a row2",
+      "credentials": {
+        "supabaseApi": {
+          "id": "aHyskcDEf3XWa7w3",
+          "name": "Supabase account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Rescatamos el id_maestro del nodo que creó la fila principal\nconst idMaestro = $('crea_flia_saca_id').first().json.id_maestro;\n\n// Le inyectamos este ID a la respuesta de cada archivo subido\nfor (const item of $input.all()) {\n  item.json.id_maestro_rel = idMaestro;\n}\n\nreturn $input.all();"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        1568
+      ],
+      "id": "11180f9c-4809-4d7c-9827-4e4dcca69d70",
+      "name": "Insertar_ID_master"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://yptieqrtzplmhbanwzmi.supabase.co/storage/v1/object/evidencias/{{ $(\"crea_flia_saca_id\").first().json.id_maestro }}/{{ $binary[Object.keys($binary)[0]].fileName }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "=={{ $binary[Object.keys($binary)[0]].mimeType }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "={{ Object.keys($binary)[0] }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        304,
+        2208
+      ],
+      "id": "32265e81-9c33-4ae6-84e4-f6f9b61f742d",
+      "name": "HTTP Request",
+      "credentials": {
+        "supabaseApi": {
+          "id": "aHyskcDEf3XWa7w3",
+          "name": "Supabase account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "tableId": "expediente_docs",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "storage_key",
+              "fieldValue": "={{ $json.Key }}"
+            },
+            {
+              "fieldId": "storage_id",
+              "fieldValue": "={{ $json.Id }}"
+            },
+            {
+              "fieldId": "id_maestro_rel",
+              "fieldValue": "={{ $json.id_maestro_rel }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        800,
+        2192
+      ],
+      "id": "7cfedfdd-7984-4794-9dfc-11a31baea638",
+      "name": "Create a row",
+      "credentials": {
+        "supabaseApi": {
+          "id": "aHyskcDEf3XWa7w3",
+          "name": "Supabase account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Rescatamos el id_maestro del nodo que creó la fila principal\nconst idMaestro = $('crea_flia_saca_id').first().json.id_maestro;\n\n// Le inyectamos este ID a la respuesta de cada archivo subido\nfor (const item of $input.all()) {\n  item.json.id_maestro_rel = idMaestro;\n}\n\nreturn $input.all();"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        2192
+      ],
+      "id": "7ceaa9ca-c6f0-4a9b-b8ce-c5948e483f25",
+      "name": "Insertar_ID_master1"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        960,
+        1808
+      ],
+      "id": "8dee309a-2113-4d2d-86c3-18dd0f32d73e",
+      "name": "Merge2"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "juDxDPEmBuWIex2b",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/juDxDPEmBuWIex2b",
+          "cachedResultName": "ARH_ocr"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1168,
+        1808
+      ],
+      "id": "15769bc8-2f7e-4122-9145-fffc25ffb1a7",
+      "name": "Execute Workflow"
+    }
+  ],
+  "connections": {
+    "Split Out": {
+      "main": [
+        [
+          {
+            "node": "Filter3",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Filter4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "limpia": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail Trigger": {
+      "main": [
+        [
+          {
+            "node": "Split Out",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "limpia",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "crea_flia_saca_id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter3": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "crea_flia_saca_id": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter4": {
+      "main": [
+        [
+          {
+            "node": "Compression1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compression1": {
+      "main": [
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "Create folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create folder": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Upload file",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "HTTP Request2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge1": {
+      "main": [
+        [
+          {
+            "node": "Upload file2",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request2": {
+      "main": [
+        [
+          {
+            "node": "Insertar_ID_master",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insertar_ID_master": {
+      "main": [
+        [
+          {
+            "node": "Create a row2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Insertar_ID_master1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insertar_ID_master1": {
+      "main": [
+        [
+          {
+            "node": "Create a row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create a row": {
+      "main": [
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Create a row2": {
+      "main": [
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge2": {
+      "main": [
+        [
+          {
+            "node": "Execute Workflow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "staticData": null,
+  "meta": null,
+  "pinData": {
+    "crea_flia_saca_id": [
+      {
+        "json": {
+          "id_maestro": "eff1363d-cddf-4144-8357-9f5e8806406f",
+          "folio_banco_midas": null,
+          "banco_cliente": "Santander",
+          "rut_cliente": "22912579-6",
+          "nombre_cliente": "Sixbel Maria Figueroa Agreda",
+          "domicilio_cliente": null,
+          "monto_reclamado": null,
+          "tipo_accion": "Demanda Civil",
+          "estado_ley_21234": null,
+          "id_abogado_1": null,
+          "id_abogado_2": null
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ],
+    "Edit Fields": [
+      {
+        "json": {
+          "id_maestro": "eff1363d-cddf-4144-8357-9f5e8806406f"
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ],
+    "Upload file2": [
+      {
+        "json": {
+          "kind": "drive#file",
+          "id": "1VTCdqG78A502Axln9YWxlJGpCQJ2tlZs",
+          "name": "Audio.MP3",
+          "mimeType": "audio/mpeg",
+          "starred": false,
+          "trashed": false,
+          "explicitlyTrashed": false,
+          "parents": [
+            "1Q22Xu2Lea9srRgBDM-GQuLF3AvV6bFJI"
+          ],
+          "spaces": [
+            "drive"
+          ],
+          "version": "2",
+          "webContentLink": "https://drive.google.com/uc?id=1VTCdqG78A502Axln9YWxlJGpCQJ2tlZs&export=download",
+          "webViewLink": "https://drive.google.com/file/d/1VTCdqG78A502Axln9YWxlJGpCQJ2tlZs/view?usp=drivesdk",
+          "iconLink": "https://drive-thirdparty.googleusercontent.com/16/type/audio/mpeg",
+          "hasThumbnail": false,
+          "thumbnailVersion": "0",
+          "viewedByMe": false,
+          "createdTime": "2026-03-05T21:07:01.060Z",
+          "modifiedTime": "2026-03-05T21:07:02.010Z",
+          "modifiedByMeTime": "2026-03-05T21:07:02.010Z",
+          "modifiedByMe": true,
+          "owners": [
+            {
+              "kind": "drive#user",
+              "displayName": "Ignacio Ramirez molina",
+              "photoLink": "https://lh3.googleusercontent.com/a/ACg8ocJIEXDgcJTDNWL9YCmfGflf7lsMokmgCpNCfTjgGpf4LM8ngg=s64",
+              "me": true,
+              "permissionId": "16290346083356681596",
+              "emailAddress": "iramirez.leg@gmail.com"
+            }
+          ],
+          "lastModifyingUser": {
+            "kind": "drive#user",
+            "displayName": "Ignacio Ramirez molina",
+            "photoLink": "https://lh3.googleusercontent.com/a/ACg8ocJIEXDgcJTDNWL9YCmfGflf7lsMokmgCpNCfTjgGpf4LM8ngg=s64",
+            "me": true,
+            "permissionId": "16290346083356681596",
+            "emailAddress": "iramirez.leg@gmail.com"
+          },
+          "shared": false,
+          "ownedByMe": true,
+          "downloadRestrictions": {
+            "itemDownloadRestriction": {
+              "restrictedForReaders": false,
+              "restrictedForWriters": false
+            },
+            "effectiveDownloadRestrictionWithContext": {
+              "restrictedForReaders": false,
+              "restrictedForWriters": false
+            }
+          },
+          "capabilities": {
+            "canAcceptOwnership": false,
+            "canAddChildren": false,
+            "canAddMyDriveParent": false,
+            "canChangeCopyRequiresWriterPermission": true,
+            "canChangeItemDownloadRestriction": true,
+            "canChangeSecurityUpdateEnabled": false,
+            "canChangeViewersCanCopyContent": true,
+            "canComment": true,
+            "canCopy": true,
+            "canDelete": true,
+            "canDisableInheritedPermissions": false,
+            "canDownload": true,
+            "canEdit": true,
+            "canEnableInheritedPermissions": true,
+            "canListChildren": false,
+            "canModifyContent": true,
+            "canModifyContentRestriction": true,
+            "canModifyEditorContentRestriction": true,
+            "canModifyOwnerContentRestriction": true,
+            "canModifyLabels": false,
+            "canMoveChildrenWithinDrive": false,
+            "canMoveItemIntoTeamDrive": true,
+            "canMoveItemOutOfDrive": true,
+            "canMoveItemWithinDrive": true,
+            "canReadLabels": false,
+            "canReadRevisions": true,
+            "canRemoveChildren": false,
+            "canRemoveContentRestriction": false,
+            "canRemoveMyDriveParent": true,
+            "canRename": true,
+            "canShare": true,
+            "canTrash": true,
+            "canUntrash": true
+          },
+          "viewersCanCopyContent": true,
+          "copyRequiresWriterPermission": false,
+          "writersCanShare": true,
+          "permissions": [
+            {
+              "kind": "drive#permission",
+              "id": "16290346083356681596",
+              "type": "user",
+              "emailAddress": "iramirez.leg@gmail.com",
+              "role": "owner",
+              "displayName": "iramirez.leg",
+              "deleted": false,
+              "pendingOwner": false
+            }
+          ],
+          "permissionIds": [
+            "16290346083356681596"
+          ],
+          "originalFilename": "Audio.MP3",
+          "fullFileExtension": "MP3",
+          "fileExtension": "MP3",
+          "md5Checksum": "8bb91d98fee1f79402554b654e04715a",
+          "sha1Checksum": "f85f7e4460f1343159b8df09b4e17d016941e171",
+          "sha256Checksum": "260d46593588487405d15e67f0ffb43447b8cacbfdfe76e7cf1c101ad9d39a38",
+          "size": "14237865",
+          "quotaBytesUsed": "14237865",
+          "headRevisionId": "0ByAuOiX_HoabYU9MZm1DZmMyZGxKUG1qTFkxQ0VKVmV3VnRvPQ",
+          "isAppAuthorized": true,
+          "linkShareMetadata": {
+            "securityUpdateEligible": false,
+            "securityUpdateEnabled": true
+          },
+          "inheritedPermissionsDisabled": false
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ]
+  },
+  "versionId": "6d5ac4f6-7ca0-41ba-b43b-55fc55118010",
+  "activeVersionId": null,
+  "triggerCount": 0,
+  "shared": [
+    {
+      "updatedAt": "2026-03-09T18:34:57.336Z",
+      "createdAt": "2026-03-09T18:34:57.336Z",
+      "role": "workflow:owner",
+      "workflowId": "h20R8B8TvWqDCZ2F",
+      "projectId": "uALgjyZSTMmadoiP"
+    }
+  ],
+  "activeVersion": null,
+  "tags": [
+    {
+      "updatedAt": "2026-02-27T18:11:08.001Z",
+      "createdAt": "2026-02-27T18:11:08.001Z",
+      "id": "sndFGzQdaIodK97N",
+      "name": "arh"
+    }
+  ]
+}
